@@ -38,7 +38,7 @@ class DefaultConfig(object):
     # miscs
     print_freq = 10
     eval_step = 50
-    save_dir = './pytorch_ckpt_milestone_RBDLF_Distiller_optimizer_lr10/market'
+    save_dir = './pytorch_ckpt_milestone_RBDLF_Distiller_optimizer_lr10_cutout32/market'
     workers = 10
     start_epoch = 0
     best_rank = -np.inf
