@@ -628,6 +628,74 @@ class ResNet_RBDLF_detach_wo_BNNeck(nn.Module):
     def get_optim_policy(self):
         return self.parameters()
 
+class ResNet_RBDLF_detach_wo_BNNeck_shared(nn.Module):
+    def __init__(self, num_classes,shared_model, resnet=None):
+        super(ResNet_RBDLF_detach_wo_BNNeck_shared, self).__init__()
+        if not resnet:
+            resnet = resnet50(pretrained=True)
+        self.backbone = nn.Sequential(
+            shared_model.backbone[0],
+            shared_model.backbone[1],
+            resnet.relu,
+            resnet.maxpool,
+            resnet.layer1,  # res_conv2
+            resnet.layer2,  # res_conv3
+            resnet.layer3,  # res_conv4
+            #resnet.layer4
+        )
+        self.res_part = nn.Sequential(
+            Bottleneck(1024, 512, stride=1, downsample=nn.Sequential(
+                nn.Conv2d(1024, 2048, kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(2048),
+            )),
+            Bottleneck(2048, 512),
+            Bottleneck(2048, 512),
+        )
+        self.res_part.load_state_dict(resnet.layer4.state_dict())
+        self.global_avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.softmax = nn.Linear(2048, num_classes)
+
+        # local branches
+        self.divide_stripes = nn.AdaptiveAvgPool2d((3, 1))
+        # stripe1
+        self.classifier1 = nn.Linear(2048, num_classes)
+        self.classifier1.apply(weights_init_kaiming)
+        # stripe2
+        self.classifier2 = nn.Linear(2048, num_classes)
+        self.classifier2.apply(weights_init_kaiming)
+        # stripe3
+        self.classifier3 = nn.Linear(2048, num_classes)
+        self.classifier3.apply(weights_init_kaiming)
+
+    def forward(self, x):
+        """
+        :param x: input image tensor of (N, C, H, W)
+        :return: (prediction, triplet_losses, softmax_losses)
+        """
+        x = self.backbone(x)
+        x = self.res_part(x)
+        # Feature maps: F
+        spatial_f = x.detach()
+        spatial_f = self.divide_stripes(spatial_f)  # [bs,2048,3,1]
+        spatial_f = spatial_f.squeeze(-1)  # [bs,2048,3]
+        # local logits
+        logits1 = self.classifier1(spatial_f[:, :, 0])
+        logits2 = self.classifier2(spatial_f[:, :, 1])
+        logits3 = self.classifier3(spatial_f[:, :, 2])
+        # local weights
+        w1 = nn.Sigmoid()(logits1)
+        w2 = nn.Sigmoid()(logits2)
+        w3 = nn.Sigmoid()(logits3)
+        x = self.global_avgpool(x).squeeze()
+        feature = self.softmax(x)
+        feature=feature* w1 * w2 * w3
+        if self.training:
+            return x,feature,logits1, logits2, logits3
+        else:
+            return x
+
+    def get_optim_policy(self):
+        return self.parameters()
 
 class ResNet_RBDLF_detach(nn.Module):
     __factory = {
@@ -899,8 +967,11 @@ class ResNet_RBDLF_detach(nn.Module):
 #         self.base[6].load_state_dict(resnet.layer4.state_dict())
 
 if __name__ == "__main__":
-    net = Resnet(depth=50,num_classes=751)
+    net = BFE(num_classes=751)
+    print(net)
     print('net size: {:.5f}M'.format(sum(p.numel() for p in net.parameters()) / 1e6)) # 25.04683M
+    for k,v in net.named_parameters():
+        print(k)
     # import torch
     #
     # x = net(torch.zeros(1, 3, 256, 128))
